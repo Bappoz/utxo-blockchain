@@ -76,6 +76,10 @@ impl Hash {
         Hash(hash_arr)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0 == [0u8; HASH_SIZE]
+    }
+
 }
 
 // Implementação do Display que permite usar println!("{}", hash)
