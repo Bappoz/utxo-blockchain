@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 const HASH_SIZE: usize = 32;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Hash([u8; HASH_SIZE]);
 
 impl Hash {

@@ -1,82 +1,87 @@
-use utxo_blockchain::models::{block::Block, transaction::{Input, Output, Transaction}};
+use utxo_blockchain::models::{block::Block, blockchain::Blockchain, transaction::{Input, Output, Transaction}};
 use utxo_blockchain::crypto::wallet::Wallet; 
-use ed25519_dalek::Verifier;
+
 
 fn main() {
-    println!("=== ⛓️  TESTE INTEGRADO: BLOCKCHAIN RUST (ETAPAS 1 & 2) ===\n");
+    println!("=== 🧪 TESTE DA ETAPA 3: UTXO & CONTABILIDADE ===\n");
 
-    // 1. GERAR CARTEIRAS (IDENTIDADES)
+    // 1. Criar identidades
+    let miner_wallet = Wallet::new();
     let alice_wallet = Wallet::new();
     let bob_wallet = Wallet::new();
-    let miner_wallet = Wallet::new();
 
-    println!("✅ Carteiras geradas:");
-    println!("   Alice: {}", alice_wallet.address());
-    println!("   Bob:   {}", bob_wallet.address());
-    println!("   Miner: {}\n", miner_wallet.address());
-
-    // 2. CRIAR O BLOCO GÉNESIS (COINBASE)
-    // O minerador recebe 50 moedas "do nada" para começar a rede
+    // 2. Criar Bloco Gênesis (O Minerador ganha 50 moedas)
     let genesis_tx = Transaction::coinbase(&miner_wallet.address(), 50);
     let genesis_block = Block::genesis(genesis_tx);
-    let genesis_hash = genesis_block.header.calculate_hash();
-
-    println!("📦 Bloco Génesis Criado!");
-    println!("   Hash: {}", genesis_hash.to_hex());
-    println!("   Merkle Root: {}\n", genesis_block.header.merkle_root.to_hex());
-
-    // 3. CRIAR UMA TRANSAÇÃO ASSINADA (Miner -> Bob)
-    println!("--- Criando Transação: Miner envia 10 para Bob ---");
     
-    // O input aponta para a transação coinbase do génesis (índice 0)
-    let mut tx = Transaction {
+    // Inicializar a Blockchain com o Genesis
+    let mut blockchain = Blockchain::new(genesis_block);
+    
+    println!("💰 Saldo Inicial Minerador: {} moedas", blockchain.get_balance(&miner_wallet.address()));
+    println!("💰 Saldo Inicial Alice: {} moedas\n", blockchain.get_balance(&alice_wallet.address()));
+
+    // --- CENÁRIO 1: Transação Válida (Minerador -> Alice) ---
+    println!("🛒 Minerador enviando 20 moedas para Alice...");
+    
+    let mut tx1 = Transaction {
         inputs: vec![Input {
-            prev_tx_hash: genesis_block.transactions[0].calculate_hash(),
+            prev_tx_hash: blockchain.chain[0].transactions[0].calculate_hash(),
             output_index: 0,
-            signature: None, // Ainda não assinado
+            signature: None,
         }],
         outputs: vec![
-            Output {
-                value: 10,
-                pubkey: bob_wallet.address(),
-            },
-            Output {
-                value: 40, // Troco para o minerador
-                pubkey: miner_wallet.address(),
-            },
+            Output { value: 20, pubkey: alice_wallet.address() }, // Envio
+            Output { value: 30, pubkey: miner_wallet.address() }, // Troco
         ],
     };
 
-    // ASSINATURA: O minerador assina com a sua chave privada
-    tx.sign(&miner_wallet.secret);
-    println!("✅ Transação assinada pelo Miner.");
+    // Assinar a transação
+    tx1.sign(&miner_wallet.secret);
 
-    // 4. VERIFICAÇÃO DE SEGURANÇA
-    let data_to_verify = tx.get_data_to_sign();
-    let signature_bytes = tx.inputs[0].signature.as_ref().unwrap();
-    let signature = ed25519_dalek::Signature::from_slice(signature_bytes).unwrap();
+    // Validar e Adicionar ao Bloco
+    if blockchain.validate_transaction(tx1.clone()) {
+        let prev_hash = blockchain.chain.last().unwrap().header.calculate_hash();
+        let block1 = Block::new(prev_hash, vec![tx1]);
+        blockchain.add_block(block1);
+        println!("✅ Bloco #1 adicionado com sucesso!");
+    }
 
-    // Qualquer nó pode verificar se a assinatura é válida usando a chave pública do minerador
-    let is_valid = miner_wallet.public.verify(&data_to_verify, &signature).is_ok();
-    println!("🛡️  Assinatura válida? {}\n", is_valid);
+    println!("💰 Novo Saldo Minerador: {}", blockchain.get_balance(&miner_wallet.address()));
+    println!("💰 Novo Saldo Alice: {}\n", blockchain.get_balance(&alice_wallet.address()));
 
-    // 5. TESTE DE ATAQUE (TAMPERING)
-    println!("--- Simulação de Ataque (Tentativa de alterar valor) ---");
-    let mut malicious_tx = tx.clone();
-    malicious_tx.outputs[0].value = 100; // Alterando valor de 10 para 100
+    // --- CENÁRIO 2: Tentativa de Gasto Duplo (Double Spending) ---
+    println!("🚨 TENTATIVA DE FRAUDE: Minerador tentando usar o mesmo Input novamente...");
+    
+    let mut tx_fraud = Transaction {
+        inputs: vec![Input {
+            prev_tx_hash: blockchain.chain[0].transactions[0].calculate_hash(), // O mesmo do genesis!
+            output_index: 0,
+            signature: None,
+        }],
+        outputs: vec![Output { value: 50, pubkey: bob_wallet.address() }],
+    };
+    tx_fraud.sign(&miner_wallet.secret);
 
-    let data_malicious = malicious_tx.get_data_to_sign();
-    let is_malicious_valid = miner_wallet.public.verify(&data_malicious, &signature).is_ok();
-    println!("🚨 Transação maliciosa válida? {} (Esperado: false)\n", is_malicious_valid);
+    if !blockchain.validate_transaction(tx_fraud) {
+        println!("🛡️  Bloqueado: O sistema detectou que essas moedas já foram gastas!\n");
+    }
 
-    // 6. ADICIONAR AO BLOCO #1
-    let block1 = Block::new(genesis_hash, vec![tx]);
-    let block1_hash = block1.header.calculate_hash();
+    // --- CENÁRIO 3: Saldo Insuficiente ---
+    println!("🚨 TENTATIVA DE FRAUDE: Alice tentando enviar mais do que tem (100 moedas)...");
+    
+    let mut tx_broke = Transaction {
+        inputs: vec![Input {
+            prev_tx_hash: blockchain.chain[1].transactions[0].calculate_hash(), // Refere-se ao bloco 1
+            output_index: 0,
+            signature: None,
+        }],
+        outputs: vec![Output { value: 100, pubkey: bob_wallet.address() }],
+    };
+    tx_broke.sign(&alice_wallet.secret);
 
-    println!("   Bloco #1 Minerado!");
-    println!("   Hash Anterior: {}", block1.header.prev_block_hash.to_hex());
-    println!("   Hash Atual:    {}", block1_hash.to_hex());
-    println!("   Merkle Root:   {}", block1.header.merkle_root.to_hex());
+    if !blockchain.validate_transaction(tx_broke) {
+        println!("🛡️  Bloqueado: Saldo insuficiente detectado!");
+    }
 
-    println!("\n=== TESTE CONCLUÍDO COM SUCESSO ===");
+    println!("\n=== ✅ FIM DOS TESTES DA ETAPA 3 ===");
 }
