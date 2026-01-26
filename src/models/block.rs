@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
-use crate::models::transaction::Transaction;
+use crate::models::transaction::{self, Transaction};
 use crate::crypto::hashing::Hash;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -15,18 +15,17 @@ pub struct BlockHeader {
     pub prev_block_hash: Hash,
     pub merkle_root: Hash,              // O resumo de todas as transações do bloco
     pub nonce: u64,                     // Usado na fase de mineração
-    pub difficulty: u32,                // Quantos zeros iniciais    
+    pub difficulty: usize,                // Quantos zeros iniciais    
 }
 
 impl BlockHeader {
     pub fn calculate_hash(&self) -> Hash {
-        let bytes = bincode::serialize(self).expect("Falha no servidor");
-        Hash::hash_data(&bytes)
+        Hash::hash_data_cached(self)
     }
 }
 
 impl Block {
-    pub fn new(prev_block_hash: Hash, transactions: Vec<Transaction>) -> Self {
+    pub fn new(prev_block_hash: Hash, transactions: Vec<Transaction>, difficulty: usize) -> Self {
         // Calcula a Merkle Root 
         let merkle_root = Hash::calculate_merkle_root(&transactions);
 
@@ -35,7 +34,7 @@ impl Block {
             prev_block_hash,
             merkle_root,
             nonce: 0,
-            difficulty: 0,
+            difficulty,
         };
 
         Block { 
@@ -45,24 +44,48 @@ impl Block {
     }
 
     pub fn mine(&mut self){
-        let target_prefix = "0".repeat(self.header.difficulty as usize);
+        let start = Utc::now();
+
+        println!("  Mineração iniciada às: {}", start.format("%H:%M:%S"));
+        println!("  Alvo de Dificuldade: {} bits zero", self.header.difficulty);
 
         loop {
             let hash = self.header.calculate_hash();
-            let hash_hex = hash.to_hex();
+            if hash.count_leading_zeros() >= self.header.difficulty {
+                let end_time = Utc::now();
+                let duration = end_time.signed_duration_since(start);
 
-            if hash_hex.starts_with(&target_prefix) {
-                println!("   Bloco minerado com sucesso!");
+                println!("✨ BLOCO MINERADO!");
+                println!("   Hash:  {}", hash); // Usa o fmt::Display que você criou
                 println!("   Nonce: {}", self.header.nonce);
-                println!("   Hash:  {}", hash_hex);
+                println!("   Tempo gasto: {}ms", duration.num_milliseconds());
+                println!("   Velocidade aprox: {} hashes/s",
+                    self.header.nonce as f32 / (duration.num_milliseconds() as f32 / 1000.0)
+                );
                 break;
-            } 
+            }
 
-            self.header.nonce = self.header.nonce.wrapping_add(1)
+            // Se não encontrou, incrementa o nonce
+            // O wrapping_add evita pânico se o número chegar ao limite de u64
+            self.header.nonce = self.header.nonce.wrapping_add(1);
+
+            if self.header.nonce == 0 {
+                self.header.timestamp = Utc::now().timestamp();
+            }
         }
     }
 
     pub fn genesis(coinbase_tx: Transaction) -> Self {
-        Self::new(Hash::new_empty(), vec![coinbase_tx])
+        let transactions = vec![coinbase_tx];
+        let merkle_root = Hash::calculate_merkle_root(&transactions);
+
+        let header = BlockHeader {
+            timestamp: Utc::now().timestamp(),
+            prev_block_hash: Hash::new_empty(),
+            merkle_root,
+            nonce: 0,
+            difficulty: 0,
+        };
+        Block { header, transactions }
     }
 }
