@@ -25,7 +25,8 @@ pub struct Output {
 
 impl Transaction {
     pub fn calculate_hash(&self) -> Hash {
-        Hash::hash_data(self)
+        let bytes = bincode::serialize(self).expect("falha no servidor");
+        Hash::hash_data(&bytes)
     }
 
     pub fn coinbase(to: &str, amount: u64) -> Self {

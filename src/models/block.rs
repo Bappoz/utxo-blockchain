@@ -9,17 +9,19 @@ pub struct Block {
     pub transactions: Vec<Transaction> 
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlockHeader {
     pub timestamp: i64,
     pub prev_block_hash: Hash,
-    pub merkle_root: Hash,            // O resumo de todas as transações do bloco
+    pub merkle_root: Hash,              // O resumo de todas as transações do bloco
     pub nonce: u64,                     // Usado na fase de mineração
+    pub difficulty: u32,                // Quantos zeros iniciais    
 }
 
 impl BlockHeader {
     pub fn calculate_hash(&self) -> Hash {
-        Hash::hash_data(self)
+        let bytes = bincode::serialize(self).expect("Falha no servidor");
+        Hash::hash_data(&bytes)
     }
 }
 
@@ -33,11 +35,30 @@ impl Block {
             prev_block_hash,
             merkle_root,
             nonce: 0,
+            difficulty: 0,
         };
 
         Block { 
             header, 
             transactions
+        }
+    }
+
+    pub fn mine(&mut self){
+        let target_prefix = "0".repeat(self.header.difficulty as usize);
+
+        loop {
+            let hash = self.header.calculate_hash();
+            let hash_hex = hash.to_hex();
+
+            if hash_hex.starts_with(&target_prefix) {
+                println!("   Bloco minerado com sucesso!");
+                println!("   Nonce: {}", self.header.nonce);
+                println!("   Hash:  {}", hash_hex);
+                break;
+            } 
+
+            self.header.nonce = self.header.nonce.wrapping_add(1)
         }
     }
 

@@ -15,6 +15,8 @@ pub struct Blockchain {
     pub utxos: HashMap<UTXOKey, Output>,
 }
 
+pub const MINING_REWARD: u64 = 50;
+
 impl Blockchain {
     /// Inicializa o blockchain com o block genesis
     pub fn new(genesis_block: Block) -> Self {
@@ -28,7 +30,12 @@ impl Blockchain {
     }
 
     //Adiciona um bloco à corrente e atualiza o UTXO set
-    pub fn add_block(&mut self, block: Block) {
+    pub fn add_block(&mut self, block: Block) -> bool {
+        
+        if !self.validate_block(&block) {
+            return false;
+        }
+        
         for tx in &block.transactions {
             let tx_hash = tx.calculate_hash();
 
@@ -54,6 +61,7 @@ impl Blockchain {
         }
         // Inseri o Bloco na corrente
         self.chain.push(block);
+        true
     } 
 
     /// Calcula o saldo de um endereço (chave pública em hex) 
@@ -69,7 +77,7 @@ impl Blockchain {
 
     /// Valida se uma transação pode ser aceita antes de minerar o bloco.
     /// Esta é a defesa principal contra Double Spending e falta de fundos.
-    pub fn validate_transaction(&self, tx: Transaction) -> bool {
+    pub fn validate_transaction(&self, tx: &Transaction) -> bool {
         if tx.is_coinbase() { return true }
 
         let mut input_value = 0;
@@ -107,5 +115,53 @@ impl Blockchain {
             println!(" Erro: Saldo insuficiente!");
             return false;
         } true
+    }
+
+
+
+
+    // Valida um bloco completo antes de adcionar à corrente
+    pub fn validate_block(&self, block: &Block) -> bool {
+        // Verifica se o bloco aponta para o hash
+        if let Some(last_block) = self.chain.last() {
+            if block.header.prev_block_hash != last_block.header.calculate_hash(){
+                println!("Bloco aponta para o hash anterior incorreto");
+                return false;
+            }
+        }
+
+        // Verifica o Proof of Work (nonce e difficulty)
+        let hash_hex = block.header.calculate_hash().to_hex();
+        let target = "0".repeat(block.header.difficulty as usize);
+        if !hash_hex.starts_with(&target){
+            println!("Bloco nao atigiu o objetivo de mineracao");
+            return false;
+        }
+
+        for tx in &block.transactions {
+            if !self.validate_transaction(tx){
+                return false;
+            }
+        }
+        true
+    }
+
+
+
+    pub fn validate_mining_reward(&self, block: &Block) -> bool {
+        let coinbase: Vec<&Transaction> = block.transactions.iter()
+            .filter(|tx| tx.is_coinbase())
+            .collect();
+
+        if coinbase.len() != 1 {
+            println!("Bloco deve ter exatamente uma transação coinbase");
+            return false;
+        }
+
+        if coinbase[0].outputs[0].value != MINING_REWARD {
+            println!("Recompensa de mineracao incorreta");
+            return false;
+        }
+        true
     }
 }
