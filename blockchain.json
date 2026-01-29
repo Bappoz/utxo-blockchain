@@ -1,0 +1,163 @@
+{
+  "chain": [
+    {
+      "header": {
+        "timestamp": 1769703282,
+        "prev_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "merkle_root": "62949fea59555ca3a190fcb9919af164a082b56928ed87192fae7d49310697e9",
+        "nonce": 0,
+        "difficulty": 0
+      },
+      "transactions": [
+        {
+          "inputs": [
+            {
+              "prev_tx_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+              "output_index": 0,
+              "signature": null
+            }
+          ],
+          "outputs": [
+            {
+              "value": 50,
+              "pubkey": "3ae6db7b05bf474209daeddd46fad6f061a40cd9b4e4f9e6b4fb063bc4524362"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "header": {
+        "timestamp": 1769703282,
+        "prev_block_hash": "4b5485b8145c761258db3f25dec99c95394c67984e8b625b1322b988cbea2368",
+        "merkle_root": "18921549d01d213c3e09ba9c5e213e0c757d489e1c61bb92bcb717740f92b823",
+        "nonce": 16973,
+        "difficulty": 16
+      },
+      "transactions": [
+        {
+          "inputs": [
+            {
+              "prev_tx_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+              "output_index": 0,
+              "signature": null
+            }
+          ],
+          "outputs": [
+            {
+              "value": 50,
+              "pubkey": "3ae6db7b05bf474209daeddd46fad6f061a40cd9b4e4f9e6b4fb063bc4524362"
+            }
+          ]
+        },
+        {
+          "inputs": [
+            {
+              "prev_tx_hash": "9d462622bc7d3dee79de8ac15083b8fbf1a1287e5e24f972ab643907156245cd",
+              "output_index": 0,
+              "signature": [
+                155,
+                23,
+                107,
+                52,
+                106,
+                231,
+                126,
+                201,
+                58,
+                246,
+                190,
+                158,
+                24,
+                245,
+                201,
+                49,
+                111,
+                191,
+                179,
+                178,
+                115,
+                239,
+                223,
+                27,
+                141,
+                253,
+                137,
+                73,
+                178,
+                198,
+                222,
+                215,
+                194,
+                59,
+                34,
+                53,
+                5,
+                198,
+                128,
+                245,
+                1,
+                56,
+                35,
+                27,
+                14,
+                23,
+                2,
+                66,
+                180,
+                186,
+                71,
+                140,
+                35,
+                117,
+                191,
+                151,
+                146,
+                33,
+                168,
+                198,
+                153,
+                202,
+                105,
+                8
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "value": 10,
+              "pubkey": "4f1ac0c9499272e70de32c5a4dc2271db2ee6822be499f8a7a4e5a69891f8db8"
+            },
+            {
+              "value": 40,
+              "pubkey": "3ae6db7b05bf474209daeddd46fad6f061a40cd9b4e4f9e6b4fb063bc4524362"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "utxos": [
+    [
+      {
+        "tx_hash": "42f504a8c4c6eb73f7d686d6868babf45caa6ac410dc568dff197ffed239f3f4",
+        "output_index": 1
+      },
+      {
+        "value": 40,
+        "pubkey": "3ae6db7b05bf474209daeddd46fad6f061a40cd9b4e4f9e6b4fb063bc4524362"
+      }
+    ],
+    [
+      {
+        "tx_hash": "42f504a8c4c6eb73f7d686d6868babf45caa6ac410dc568dff197ffed239f3f4",
+        "output_index": 0
+      },
+      {
+        "value": 10,
+        "pubkey": "4f1ac0c9499272e70de32c5a4dc2271db2ee6822be499f8a7a4e5a69891f8db8"
+      }
+    ]
+  ],
+  "mempool": []
+}

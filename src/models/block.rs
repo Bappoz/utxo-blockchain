@@ -1,9 +1,9 @@
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
-use crate::models::transaction::{self, Transaction};
+use crate::models::transaction::Transaction;
 use crate::crypto::hashing::Hash;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction> 

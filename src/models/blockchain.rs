@@ -1,10 +1,13 @@
+use std::fs::File;
+use std::io::{Write, Read};
 use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 use crate::models::{block::Block, transaction::{Output, Transaction}};
 use crate::crypto::hashing::Hash;
 use std::collections::HashMap;
 
 ///Representa o identificador único de um Output na rede
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UTXOKey{
     pub tx_hash: Hash,
     pub output_index: usize,
@@ -13,7 +16,17 @@ pub struct UTXOKey{
 pub struct Blockchain {
     pub chain: Vec<Block>,
     pub utxos: HashMap<UTXOKey, Output>,
+    pub mempool: Vec<Transaction>,          // Sala de espera
 }
+
+// Estrutura para salvar o estado completo
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlockchainSnapshot {
+    chain: Vec<Block>,
+    utxos: Vec<(UTXOKey, Output)>,
+    mempool: Vec<Transaction>,
+}
+
 
 pub const MINING_REWARD: u64 = 50;
 
@@ -23,11 +36,47 @@ impl Blockchain {
         let mut bc = Blockchain {
             chain: Vec::new(),
             utxos: HashMap::new(),
+            mempool: Vec::new(),
         };
         // Ao iniciar, processa o bloco gênesis para popular os primeiros UTXOs
         bc.add_block(genesis_block);
         bc
     }
+
+    pub fn submit_transaction(&mut self, tx: Transaction) -> bool {
+        if !self.validate_transaction(&tx) {
+            return false;
+        }
+
+        // Verifica se a transação já não está na mempool evitando spam
+        let tx_hash = tx.calculate_hash();
+        if self.mempool.iter().any(|m_tx| m_tx.calculate_hash() == tx_hash) {
+            println!("Transacao ja esta na mempool");
+            return false;
+        }
+        self.mempool.push(tx);
+        true
+    }
+
+    /// O Minerador "limpa" a mempool e cria um novo bloco
+    pub fn create_next_block(&mut self, miner_addr: &str, difficulty: usize) -> Block {
+        // 1. Cria a recompensa (Coinbase)
+        let mut transactions = vec![Transaction::coinbase(miner_addr, MINING_REWARD)];
+
+        // 2. Coleta TODAS as transações da mempool e limpa a fila
+        // O método drain(..) remove os itens e os retorna
+        transactions.extend(self.mempool.drain(..));
+
+        // 3. Pega o hash do bloco anterior
+        let prev_hash = self.chain.last()
+            .map(|b| b.header.calculate_hash())
+            .unwrap_or(Hash::new_empty());
+
+        // 4. Cria o bloco pronto para minerar
+        Block::new(prev_hash, transactions, difficulty)
+    }
+
+    
 
     //Adiciona um bloco à corrente e atualiza o UTXO set
     pub fn add_block(&mut self, block: Block) -> bool {
@@ -130,11 +179,14 @@ impl Blockchain {
             }
         }
 
-        // Verifica o Proof of Work (nonce e difficulty)
-        let hash_hex = block.header.calculate_hash().to_hex();
-        let target = "0".repeat(block.header.difficulty as usize);
-        if !hash_hex.starts_with(&target){
-            println!("Bloco nao atigiu o objetivo de mineracao");
+        let block_hash = block.header.calculate_hash();
+        if block_hash.count_leading_zeros() < block.header.difficulty {
+            println!(" Erro: Bloco não atingiu o objetivo de bits ({} bits necessários)", block.header.difficulty);
+            return false;
+        }
+
+        // Regra de Recompensa
+        if !self.validate_mining_reward(block) {
             return false;
         }
 
@@ -163,5 +215,41 @@ impl Blockchain {
             return false;
         }
         true
+    }
+
+
+
+
+    pub fn save_to_file(&self, path: &str) -> std::io::Result<()> {
+        let snapshot = BlockchainSnapshot {
+            chain: self.chain.clone(),
+            utxos: self.utxos.iter().map(|(k, y)| (k.clone(), y.clone())).collect(),
+            mempool: self.mempool.clone(),
+        };
+
+        let json = serde_json::to_string_pretty(&snapshot)
+            .expect("Erro ao serializar blockchain");
+        let mut file = File::create(path)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+
+        println!("Blockchain salvo com sucesso em: {}", path);
+        Ok(())
+    }
+
+    pub fn load_from_file(path: &str) -> std::io::Result<Self> {
+        let mut file = File::open(path)?;
+        let mut json = String::new();
+        file.read_to_string(&mut json)?;
+
+        let snapshots: BlockchainSnapshot = serde_json::from_str(&json)
+            .expect("Error ao ler json");
+        let utxos_map: HashMap<UTXOKey, Output> = snapshots.utxos.into_iter().collect();
+
+        Ok(Blockchain{
+            chain: snapshots.chain,
+            utxos: utxos_map,
+            mempool: snapshots.mempool,
+        })
     }
 }
