@@ -1,75 +1,86 @@
-use utxo_blockchain::models::{block::Block, blockchain::Blockchain, transaction::{Input, Output, Transaction}};
-use utxo_blockchain::crypto::wallet::Wallet; 
+use std::env;
+use tokio::net::{TcpListener};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use utxo_blockchain::models::blockchain::Blockchain;
+use utxo_blockchain::crypto::wallet::Wallet;
+use utxo_blockchain::models::block::Block;
+use utxo_blockchain::models::transaction::Transaction;
 
-fn main() {
-    let db_path = "blockchain.json";
-    
-    // 1. CARTEIRAS COM SEEDS FIXAS
-    // Agora miner_wallet e alice_wallet terão sempre o mesmo endereço em cada execução
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Configuração de Argumentos (Ex: cargo run 8080)
+    let args: Vec<String> = env::args().collect();
+    let port = args.get(1).map(|s| s.as_str()).unwrap_or("8080");
+    let addr = format!("127.0.0.1:{}", port);
+
+    println!("🚀 Iniciando Nó na porta {}...", port);
+
+    // Inicializar Blockchain e Carteira
     let miner_wallet = Wallet::from_seed("minerador_secreto_123");
-    let alice_wallet = Wallet::from_seed("alice_secreta_456");
+    let mut blockchain = carregar_ou_criar_blockchain("blockchain.json", &miner_wallet);
 
-    let mut blockchain = if std::path::Path::new(db_path).exists() {
-        Blockchain::load_from_file(db_path).expect("Erro ao carregar")
-    } else {
-        println!("🌱 Criando novo Gênesis para o Minerador Fixo...");
-        let genesis_tx = Transaction::coinbase(&miner_wallet.address(), 50);
-        let genesis_block = Block::genesis(genesis_tx);
-        let bc = Blockchain::new(genesis_block);
-        bc.save_to_file(db_path).unwrap();
-        bc
-    };
+    // CLONAR ESTADO PARA AS THREADS
+    // Nota: Em um sistema real devo usar Arc<Mutex<Blockchain>>, 
+    // mas para este rascunho vamos focar na escuta de rede.
+    
+    let addr_clone = addr.clone();
+    
+    //  O SERVIDOR DE REDE (Escuta outros nós)
+    tokio::spawn(async move {
+        let listener = TcpListener::bind(&addr_clone).await.unwrap();
+        println!("📡 Servidor P2P ouvindo em {}", addr_clone);
 
+        loop {
+            let (mut socket, peer_addr) = listener.accept().await.unwrap();
+            println!("🤝 Novo peer conectado: {}", peer_addr);
 
-    println!("\n--- 📥 TESTANDO MEMPOOL ---");
-    println!("Saldo Inicial Minerador: {}", blockchain.get_balance(&miner_wallet.address()));
-
-    // 2. CRIAR UMA TRANSAÇÃO MANUAL
-    // Procuramos um UTXO que realmente pertença à chave do minerador_wallet
-    let miner_addr = miner_wallet.address();
-    let utxo_do_minerador = blockchain.utxos.iter().find(|(_, output)| {
-        output.pubkey == miner_addr && output.value >= 10 
+            tokio::spawn(async move {
+                let mut buffer = [0; 1024];
+                loop {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    if n == 0 { break; }
+                    
+                    let recebido = String::from_utf8_lossy(&buffer[..n]);
+                    println!("📩 Mensagem de {}: {}", peer_addr, recebido);
+                    
+                    // Responder apenas para confirmar
+                    socket.write_all(b"Mensagem recebida pelo no!").await.unwrap();
+                }
+            });
+        }
     });
 
-    if let Some((key, output)) = utxo_do_minerador {
-        let mut tx = Transaction {
-            inputs: vec![Input {
-                prev_tx_hash: key.tx_hash,
-                output_index: key.output_index,
-                signature: None,
-            }],
-            outputs: vec![
-                Output { value: 10, pubkey: alice_wallet.address() },
-                Output { value: output.value - 10, pubkey: miner_wallet.address() }, // Troco para o minerador
-            ],
-        };
+    println!("⛏️  Minerador pronto. Pressione Enter para minerar um bloco ou 'q' para sair.");
+    
+    let mut input = String::new();
+    loop {
+        std::io::stdin().read_line(&mut input)?;
+        if input.trim() == "q" { break; }
 
-        // Agora a assinatura vai bater, pois a miner_wallet é a dona real do UTXO
-        tx.sign(&miner_wallet.secret);
-
-        if blockchain.submit_transaction(tx) {
-            println!("✅ Transação aceita na Mempool!");
-        }
-    } else {
-        println!("❌ Minerador não possui UTXOs suficientes.");
-    }
-
-    println!("Saldo Alice (antes da mineração): {}", blockchain.get_balance(&alice_wallet.address()));
-
-    // 3. MINERAR TUDO QUE ESTÁ NA MEMPOOL
-    if !blockchain.mempool.is_empty() {
-        // O minerador do bloco recebe a recompensa de 50 (coinbase)
+        println!("⛏️  Criando e minerando novo bloco...");
         let mut novo_bloco = blockchain.create_next_block(&miner_wallet.address(), 16);
-        
-        println!("⛏️  Minerando bloco com {} transações...", novo_bloco.transactions.len());
         novo_bloco.mine();
 
         if blockchain.add_block(novo_bloco) {
-            blockchain.save_to_file(db_path).unwrap();
-            println!("✨ Bloco adicionado com sucesso!");
+            blockchain.save_to_file("blockchain.json")?;
+            println!("✅ Bloco minerado e salvo!");
         }
+        
+        input.clear();
     }
 
-    println!("Saldo Alice (depois da mineração): {}", blockchain.get_balance(&alice_wallet.address()));
-    println!("Saldo Minerador (depois da mineração): {}", blockchain.get_balance(&miner_wallet.address()));
+    Ok(())
+}
+
+// Função auxiliar para simplificar a main
+fn carregar_ou_criar_blockchain(path: &str, wallet: &Wallet) -> Blockchain {
+    if std::path::Path::new(path).exists() {
+        Blockchain::load_from_file(path).unwrap()
+    } else {
+        let genesis_tx = Transaction::coinbase(&wallet.address(), 50);
+        let genesis_block = Block::genesis(genesis_tx);
+        let bc = Blockchain::new(genesis_block);
+        bc.save_to_file(path).unwrap();
+        bc
+    }
 }
