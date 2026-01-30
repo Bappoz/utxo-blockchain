@@ -22,15 +22,17 @@ pub struct Blockchain {
 // Estrutura para salvar o estado completo
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlockchainSnapshot {
-    chain: Vec<Block>,
-    utxos: Vec<(UTXOKey, Output)>,
-    mempool: Vec<Transaction>,
+    pub chain: Vec<Block>,
+    pub utxos: Vec<(UTXOKey, Output)>,
+    pub mempool: Vec<Transaction>,
 }
 
 
 pub const MINING_REWARD: u64 = 50;
 
 impl Blockchain {
+
+
     /// Inicializa o blockchain com o block genesis
     pub fn new(genesis_block: Block) -> Self {
         let mut bc = Blockchain {
@@ -43,6 +45,7 @@ impl Blockchain {
         bc
     }
 
+    
     pub fn submit_transaction(&mut self, tx: Transaction) -> bool {
         if self.validate_transaction(&tx).is_err() {
             return false;
@@ -132,145 +135,5 @@ impl Blockchain {
         } balance
     }
 
-    /// Valida se uma transação pode ser aceita antes de minerar o bloco.
-    /// Esta é a defesa principal contra Double Spending e falta de fundos.
-    pub fn validate_transaction(&self, tx: &Transaction) -> Result<u64, String> {
-        if tx.is_coinbase() { return Ok(0) }
 
-        let mut input_value = 0;
-
-        for input in &tx.inputs {
-            let key = UTXOKey {
-                tx_hash: input.prev_tx_hash,
-                output_index: input.output_index,
-            };
-
-            // Double spending check. O Utxo existe no nosso set?
-            if let Some(utxo) = self.utxos.get(&key) {
-                input_value += utxo.value;  
-
-                // RECUPERAR A CHAVE PÚBLICA DO DONO
-                let pubkey_bytes = hex::decode(&utxo.pubkey).expect("Falha ao decodificar hex");
-                let public_key = VerifyingKey::from_bytes(
-                    &pubkey_bytes.try_into().expect("Tamanho de chave inválido")
-                ).expect("Falha ao reconstruir VerifyingKey");
-
-                // A assinatura do Input prova que o dono autorizou?
-                if tx.verify(&public_key) == false{
-                    return Err(" Erro: Assinatura inválida para o UTXO fornecido!".to_string());
-                    
-                }
-            } else {
-                return Err(" Erro: Input aponta para UTXO inexistente ou já gasto!".to_string());
-            }          
-        }
-
-        // Verificar Saldo
-        let output_value: u64 = tx.outputs.iter().map(|o| o.value).sum();
-        if input_value < output_value {
-            return Err(" Erro: Saldo insuficiente!".to_string());
-        } 
-        // Taxa de comissão
-        Ok(input_value - output_value)
-    }
-
-
-
-
-    // Valida um bloco completo antes de adcionar à corrente
-    pub fn validate_block(&self, block: &Block) -> bool {
-        // Verifica se o bloco aponta para o hash
-        if let Some(last_block) = self.chain.last() {
-            if block.header.prev_block_hash != last_block.header.calculate_hash(){
-                println!("Bloco aponta para o hash anterior incorreto");
-                return false;
-            }
-        }
-
-        let block_hash = block.header.calculate_hash();
-        if block_hash.count_leading_zeros() < block.header.difficulty {
-            println!(" Erro: Bloco não atingiu o objetivo de bits ({} bits necessários)", block.header.difficulty);
-            return false;
-        }
-
-        // Regra de Recompensa
-        if !self.validate_mining_reward(block) {
-            return false;
-        }
-
-        for tx in &block.transactions {
-            if self.validate_transaction(tx).is_err(){
-                return false;
-            }
-        }
-        true
-    }
-
-
-
-    pub fn validate_mining_reward(&self, block: &Block) -> bool {
-        let coinbase = block.transactions.iter()
-            .find(|tx| tx.is_coinbase());
-
-        if let Some(cb_tx) = coinbase {
-            let mut total_fees = 0;
-
-            // Calcula as taxas de todas as transações do Bloco
-            for tx in block.transactions.iter()
-                .filter(|tx| !tx.is_coinbase()){
-                    match self.validate_transaction(tx) {
-                        Ok(fee) => total_fees += fee,
-                        Err(_) => return false,
-                    }
-                }    
-            
-            let reward_received = cb_tx.outputs[0].value;
-            let expected_reward = MINING_REWARD + total_fees;
-
-            if  reward_received != expected_reward {
-                println!("Erro: Recompensa de mineração incorreta! Recebeu {}, esperado {}", reward_received, expected_reward);
-                return false;
-            }
-            true
-        } else {
-            println!("Erro: Bloco sem transação Coinbase");
-            false
-        }
-    }
-
-
-
-
-    pub fn save_to_file(&self, path: &str) -> std::io::Result<()> {
-        let snapshot = BlockchainSnapshot {
-            chain: self.chain.clone(),
-            utxos: self.utxos.iter().map(|(k, y)| (k.clone(), y.clone())).collect(),
-            mempool: self.mempool.clone(),
-        };
-
-        let json = serde_json::to_string_pretty(&snapshot)
-            .expect("Erro ao serializar blockchain");
-        let mut file = File::create(path)?;
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?;
-
-        println!("Blockchain salvo com sucesso em: {}", path);
-        Ok(())
-    }
-
-    pub fn load_from_file(path: &str) -> std::io::Result<Self> {
-        let mut file = File::open(path)?;
-        let mut json = String::new();
-        file.read_to_string(&mut json)?;
-
-        let snapshots: BlockchainSnapshot = serde_json::from_str(&json)
-            .expect("Error ao ler json");
-        let utxos_map: HashMap<UTXOKey, Output> = snapshots.utxos.into_iter().collect();
-
-        Ok(Blockchain{
-            chain: snapshots.chain,
-            utxos: utxos_map,
-            mempool: snapshots.mempool,
-        })
-    }
 }
