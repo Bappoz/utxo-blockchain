@@ -44,7 +44,7 @@ impl Blockchain {
     }
 
     pub fn submit_transaction(&mut self, tx: Transaction) -> bool {
-        if !self.validate_transaction(&tx) {
+        if self.validate_transaction(&tx).is_err() {
             return false;
         }
 
@@ -60,19 +60,27 @@ impl Blockchain {
 
     /// O Minerador "limpa" a mempool e cria um novo bloco
     pub fn create_next_block(&mut self, miner_addr: &str, difficulty: usize) -> Block {
-        // 1. Cria a recompensa (Coinbase)
-        let mut transactions = vec![Transaction::coinbase(miner_addr, MINING_REWARD)];
+        
+        let mut total_fees = 0;
+        let mut valid_txs = Vec::new();
 
-        // 2. Coleta TODAS as transações da mempool e limpa a fila
-        // O método drain(..) remove os itens e os retorna
-        transactions.extend(self.mempool.drain(..));
+        // Dreana a mempool e calcula a taxa
+        let mempool_txs: Vec<_> = self.mempool.drain(..).collect();
+        for tx in mempool_txs {
+            if let Ok(fee) = self.validate_transaction(&tx) {
+                total_fees += fee;
+                valid_txs.push(tx);
+            }
+        }
 
-        // 3. Pega o hash do bloco anterior
+        // Recompensa do minerador (50 + taxa)
+        let coinbase_reward = MINING_REWARD + total_fees;
+        let mut transactions = vec![Transaction::coinbase(miner_addr, coinbase_reward)];
+        transactions.extend(valid_txs);
+
         let prev_hash = self.chain.last()
-            .map(|b| b.header.calculate_hash())
-            .unwrap_or(Hash::new_empty());
-
-        // 4. Cria o bloco pronto para minerar
+                .map(|b| b.header.calculate_hash()).unwrap_or(Hash::new_empty());
+        
         Block::new(prev_hash, transactions, difficulty)
     }
 
@@ -126,8 +134,8 @@ impl Blockchain {
 
     /// Valida se uma transação pode ser aceita antes de minerar o bloco.
     /// Esta é a defesa principal contra Double Spending e falta de fundos.
-    pub fn validate_transaction(&self, tx: &Transaction) -> bool {
-        if tx.is_coinbase() { return true }
+    pub fn validate_transaction(&self, tx: &Transaction) -> Result<u64, String> {
+        if tx.is_coinbase() { return Ok(0) }
 
         let mut input_value = 0;
 
@@ -149,21 +157,21 @@ impl Blockchain {
 
                 // A assinatura do Input prova que o dono autorizou?
                 if tx.verify(&public_key) == false{
-                    println!(" Erro: Assinatura inválida para o UTXO fornecido!");
-                    return false;
+                    return Err(" Erro: Assinatura inválida para o UTXO fornecido!".to_string());
+                    
                 }
             } else {
-                println!(" Erro: Input aponta para UTXO inexistente ou já gasto!");
-                return false;
+                return Err(" Erro: Input aponta para UTXO inexistente ou já gasto!".to_string());
             }          
         }
 
         // Verificar Saldo
         let output_value: u64 = tx.outputs.iter().map(|o| o.value).sum();
         if input_value < output_value {
-            println!(" Erro: Saldo insuficiente!");
-            return false;
-        } true
+            return Err(" Erro: Saldo insuficiente!".to_string());
+        } 
+        // Taxa de comissão
+        Ok(input_value - output_value)
     }
 
 
@@ -191,7 +199,7 @@ impl Blockchain {
         }
 
         for tx in &block.transactions {
-            if !self.validate_transaction(tx){
+            if self.validate_transaction(tx).is_err(){
                 return false;
             }
         }
@@ -201,20 +209,33 @@ impl Blockchain {
 
 
     pub fn validate_mining_reward(&self, block: &Block) -> bool {
-        let coinbase: Vec<&Transaction> = block.transactions.iter()
-            .filter(|tx| tx.is_coinbase())
-            .collect();
+        let coinbase = block.transactions.iter()
+            .find(|tx| tx.is_coinbase());
 
-        if coinbase.len() != 1 {
-            println!("Bloco deve ter exatamente uma transação coinbase");
-            return false;
-        }
+        if let Some(cb_tx) = coinbase {
+            let mut total_fees = 0;
 
-        if coinbase[0].outputs[0].value != MINING_REWARD {
-            println!("Recompensa de mineracao incorreta");
-            return false;
+            // Calcula as taxas de todas as transações do Bloco
+            for tx in block.transactions.iter()
+                .filter(|tx| !tx.is_coinbase()){
+                    match self.validate_transaction(tx) {
+                        Ok(fee) => total_fees += fee,
+                        Err(_) => return false,
+                    }
+                }    
+            
+            let reward_received = cb_tx.outputs[0].value;
+            let expected_reward = MINING_REWARD + total_fees;
+
+            if  reward_received != expected_reward {
+                println!("Erro: Recompensa de mineração incorreta! Recebeu {}, esperado {}", reward_received, expected_reward);
+                return false;
+            }
+            true
+        } else {
+            println!("Erro: Bloco sem transação Coinbase");
+            false
         }
-        true
     }
 
 
