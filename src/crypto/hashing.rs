@@ -1,10 +1,10 @@
-use std::fmt;
-use hmac::{Hmac, Mac};
-use sha2::{Sha256, Digest};
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use crate::models::transaction::Transaction;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use hmac::{Hmac, Mac};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 
 const HASH_SIZE: usize = 32;
 
@@ -20,16 +20,17 @@ lazy_static::lazy_static! {
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Hash([u8; HASH_SIZE]);
 
-
 ///Prova criptográfica de Merkle para verificar leve de transações
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MerkleProof{
-    pub index: usize,               // Indice de transação no bloco
-    pub siblings: Vec<Hash>,        // Hashes irmaos necessarios para reconstruir a raiz
+pub struct MerkleProof {
+    pub index: usize,        // Indice de transação no bloco
+    pub siblings: Vec<Hash>, // Hashes irmaos necessarios para reconstruir a raiz
 }
 
 impl Hash {
-    
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Hash(bytes)
+    }
     pub fn new_empty() -> Self {
         Hash([0u8; HASH_SIZE])
     }
@@ -37,15 +38,15 @@ impl Hash {
     pub fn is_empty(&self) -> bool {
         self.0 == [0u8; HASH_SIZE]
     }
-    
+
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
     }
-    
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
-    
+
     /// Gera o dado de qualquer hash serializável
     pub fn hash_data<T: Serialize>(data: &T) -> Self {
         let bytes = bincode::serialize(data).expect("Falha na serializacao bincode");
@@ -62,7 +63,6 @@ impl Hash {
         hash.copy_from_slice(&final_hash);
         Hash(hash)
     }
-
 
     /// Hash com cache (otimização para dados repetidos)
     pub fn hash_data_cached<T: Serialize>(data: &T) -> Self {
@@ -91,47 +91,38 @@ impl Hash {
         hash
     }
 
-
     /// limpa o cache de hashes
     pub fn clean_cache() {
         HASH_CACHE.lock().unwrap().clear();
     }
 
-
-
-
     // ========== HMAC (Autenticação de Mensagens) ==========
-    
+
     /// Gera HMAC-SHA256 para autenticação de mensagens
-    /// 
+    ///
     /// Usado para verificar integridade + autenticidade de dados
     /// com uma chave secreta compartilhada
     pub fn hmac<T: Serialize>(data: &T, key: &[u8]) -> Self {
-        let bytes = bincode::serialize(data)
-            .expect("Falha na serialização bincode");
-        
-        let mut mac = HmacSha256::new_from_slice(key)
-            .expect("HMAC aceita chaves de qualquer tamanho");
+        let bytes = bincode::serialize(data).expect("Falha na serialização bincode");
+
+        let mut mac =
+            HmacSha256::new_from_slice(key).expect("HMAC aceita chaves de qualquer tamanho");
         mac.update(&bytes);
-        
+
         let result = mac.finalize();
         let code_bytes = result.into_bytes();
-        
+
         let mut hash = [0u8; HASH_SIZE];
         hash.copy_from_slice(&code_bytes);
         Hash(hash)
     }
 
     /// Verifica HMAC usando comparação de tempo constante
-    /// 
+    ///
     /// Previne timing attacks ao comparar hashes
-    pub fn verify_hmac<T: Serialize>(
-        expected_hmac: &Hash,
-        data: &T,
-        key: &[u8],
-    ) -> bool {
+    pub fn verify_hmac<T: Serialize>(expected_hmac: &Hash, data: &T, key: &[u8]) -> bool {
         let calculated = Self::hmac(data, key);
-        
+
         // Comparação de tempo constante
         use subtle::ConstantTimeEq;
         calculated.0.ct_eq(&expected_hmac.0).into()
@@ -147,15 +138,16 @@ impl Hash {
                 count += byte.leading_zeros() as usize;
                 break;
             }
-        } count
+        }
+        count
     }
-
 
     // Verifica se o hash atende à dificuldade exigida
     pub fn has_sufficient_difficulty(&self, difficulty: usize) -> bool {
         if difficulty > HASH_SIZE * 8 {
             return false;
-        } self.count_leading_zeros() >= difficulty
+        }
+        self.count_leading_zeros() >= difficulty
     }
 
     // Verifica se o hash comeca com N zeros hexadecimais
@@ -171,10 +163,8 @@ impl Hash {
         }
 
         // Gerar os hashes iniciais (folhas da árvore)
-        let mut current_level: Vec<Hash> = transactions
-            .iter()
-            .map(|tx| Hash::hash_data(tx))
-            .collect();
+        let mut current_level: Vec<Hash> =
+            transactions.iter().map(|tx| Hash::hash_data(tx)).collect();
 
         // Subir a árvore até sobrar apenas o hash
         while current_level.len() > 1 {
@@ -184,7 +174,7 @@ impl Hash {
                 // Se não houver um par (ímpar), duplica o da esquerda (padrão Bitcoin)
                 let right = chunk.get(1).unwrap_or(left);
 
-                let parent_hash= Hash::calculate_hash_tree_branch(left, right);
+                let parent_hash = Hash::calculate_hash_tree_branch(left, right);
                 next_level.push(parent_hash);
             }
             current_level = next_level;
@@ -192,11 +182,8 @@ impl Hash {
         current_level[0]
     }
 
-
-
     // Função de auxilio que calcula o hash de duas child nodes
     pub fn calculate_hash_tree_branch(left: &Hash, right: &Hash) -> Hash {
-        
         // Concatena os bytes do hash da esquerda com o da direita
         let mut combined = Vec::with_capacity(HASH_SIZE * 2);
         combined.extend_from_slice(left.as_bytes());
@@ -216,15 +203,13 @@ impl Hash {
         Hash(hash_arr)
     }
 
-
-
     // ========== MERKLE PROOF (Verificação Leve) ==========
-    
+
     /// Gera uma prova de Merkle para uma transação específica
-    /// 
+    ///
     /// Permite provar que uma transação está no bloco sem
     /// precisar baixar todas as transações (SPV - Simplified Payment Verification)
-    /// 
+    ///
     /// Complexidade: O(log n) em vez de O(n)
     pub fn generate_merkle_proof(
         transactions: &[Transaction],
@@ -235,17 +220,15 @@ impl Hash {
         }
 
         let mut siblings = Vec::new();
-        let mut current_level: Vec<Hash> = transactions
-            .iter()
-            .map(|tx| Hash::hash_data(tx))
-            .collect();
-        
+        let mut current_level: Vec<Hash> =
+            transactions.iter().map(|tx| Hash::hash_data(tx)).collect();
+
         let mut current_index = tx_index;
 
         // Sobe a árvore salvando os irmãos necessários
         while current_level.len() > 1 {
             let mut next_level = Vec::new();
-            
+
             for (i, chunk) in current_level.chunks(2).enumerate() {
                 let left = &chunk[0];
                 let right = chunk.get(1).unwrap_or(left);
@@ -263,7 +246,7 @@ impl Hash {
 
                 next_level.push(Hash::calculate_hash_tree_branch(left, right));
             }
-            
+
             current_level = next_level;
             current_index /= 2;
         }
@@ -274,18 +257,12 @@ impl Hash {
         })
     }
 
-
-
     /// Verifica se uma transação pertence a uma Merkle Root usando a prova
-    /// 
+    ///
     /// Reconstrói o caminho até a raiz usando apenas os irmãos fornecidos
-    /// 
+    ///
     /// Retorna true se a transação realmente está no bloco
-    pub fn verify_merkle_proof(
-        tx: &Transaction,
-        merkle_root: &Hash,
-        proof: &MerkleProof,
-    ) -> bool {
+    pub fn verify_merkle_proof(tx: &Transaction, merkle_root: &Hash, proof: &MerkleProof) -> bool {
         let mut current_hash = Hash::hash_data(tx);
         let mut index = proof.index;
 
@@ -305,7 +282,6 @@ impl Hash {
         use subtle::ConstantTimeEq;
         current_hash.0.ct_eq(&merkle_root.0).into()
     }
-
 }
 
 // Implementação do Display que permite usar println!("{}", hash)
@@ -329,22 +305,22 @@ impl fmt::Debug for Hash {
 // Isso permite que o Serde salve o hash como uma string legível em JSON
 impl Serialize for Hash {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&self.to_hex())
     }
 }
 
 impl<'de> Deserialize<'de> for Hash {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de> 
-        {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
-        let bytes = hex::decode(s).map_err(|e| {
-            serde::de::Error::custom(format!("Erro ao decodificar hex: {}", e))
-        })?;
-        
+        let bytes = hex::decode(s)
+            .map_err(|e| serde::de::Error::custom(format!("Erro ao decodificar hex: {}", e)))?;
+
         if bytes.len() != HASH_SIZE {
             return Err(serde::de::Error::custom(format!(
                 "Tamanho de hash inválido: esperado {}, recebido {}",
@@ -352,10 +328,9 @@ impl<'de> Deserialize<'de> for Hash {
                 bytes.len()
             )));
         }
-        
+
         let mut arr = [0u8; HASH_SIZE];
         arr.copy_from_slice(&bytes);
         Ok(Hash(arr))
     }
 }
-
