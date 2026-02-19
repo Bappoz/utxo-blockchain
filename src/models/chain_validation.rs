@@ -1,24 +1,41 @@
 use ed25519_dalek::VerifyingKey;
+use crate::crypto::hashing::Hash;
 use crate::models::blockchain::{Blockchain, UTXOKey, MINING_REWARD};
 use crate::models::block::Block;
 use crate::models::transaction::Transaction;
 
 impl Blockchain {
+    
+
     pub fn validate_transaction(&self, tx: &Transaction) -> Result<u64, String> {
         if tx.is_coinbase() { return Ok(0); }
+        
+        if tx.inputs.is_empty() || tx.outputs.is_empty() {
+            return Err("Transaco sem inputs e outputs".to_string())
+        }
 
-        let mut input_value = 0;
+        
+        let mut input_value: u64 = 0;
+
         for input in &tx.inputs {
             let key = UTXOKey { tx_hash: input.prev_tx_hash, output_index: input.output_index };
 
             if let Some(utxo) = self.utxos.get(&key) {
-                input_value += utxo.value;
-                let pubkey_bytes = hex::decode(&utxo.pubkey).map_err(|_| "Hex inválido")?;
-                let public_key = VerifyingKey::from_bytes(&pubkey_bytes.try_into().map_err(|_| "Tamanho chave inválido")?).map_err(|_| "Erro chave")?;
+
+                // Verify signiture
+                let pubkey_bytes = hex::decode(&utxo.pubkey)
+                    .map_err(|_| "Hex inválido")?;
+                let public_key = VerifyingKey::from_bytes(&pubkey_bytes
+                    .try_into()
+                    .map_err(|_| "Tamanho chave inválido")?
+                ).map_err(|_| "Erro chave")?;
 
                 if !tx.verify(&public_key) {
                     return Err("Assinatura inválida!".to_string());
                 }
+ 
+                input_value += utxo.value;
+            
             } else {
                 return Err("Input inexistente ou gasto!".to_string());
             }
@@ -31,15 +48,47 @@ impl Blockchain {
         Ok(input_value - output_value)
     }
 
+
+    
+
+    /// Validate the Block Check up
     pub fn validate_block(&self, block: &Block) -> bool {
         if let Some(last_block) = self.chain.last() {
-            if block.header.prev_block_hash != last_block.header.calculate_hash() { return false; }
+            if block.header.prev_block_hash != last_block.header.calculate_hash() { 
+                println!("Hash anterior invalido!");
+                return false; 
+            }
+            
+            // Verify Proof of Work
+            if block.header
+                .calculate_hash()
+                    .count_leading_zeros() < block.header.difficulty { 
+                        return false; 
+                    }
+        }
+        
+        // Verify Merkle Root
+        let calculated_root = Hash::calculate_merkle_root(&block.transactions);
+        if calculated_root != block.header.merkle_root {
+    1       println!("Merkle Root invalido!");
+            return false;
         }
 
-        if block.header.calculate_hash().count_leading_zeros() < block.header.difficulty { return false; }
-        if !self.validate_mining_reward(block) { return false; }
-
-        block.transactions.iter().all(|tx| self.validate_transaction(tx).is_ok())
+        // Verify if there is at least 1 coinbase and if it is in the start
+        let coinbase_count = block.transactions.iter().filter(|tx| tx.is_coinbase());
+        if coinbase_count != 1 || !block.transactions[0].is_coinbase() {
+            println!("Hash anterior invalido!");
+            return false;
+        }
+        
+        // Validate all transactions except the coibase 
+        for tx in block.transactions.iter().skip(1)  {
+            if let Err(e) = self.validate_transaction(tx) {
+                println!("Transaccao invalida no bloco: {}", e);
+                return false;
+            }
+        }
+        true
     }
 
     pub fn validate_mining_reward(&self, block: &Block) -> bool {
@@ -51,5 +100,28 @@ impl Blockchain {
 
             cb_tx.outputs[0].value == MINING_REWARD + total_fees
         } else { false }
+    }
+
+
+
+
+    // Validate the full chain from the start
+    pub fn validate_full_chaiin(blocks:&[Block]) -> bool {
+        for (i, block) in blocks.iter().enumerate() {
+            if i == 0 { continue; } // Genesis accepted
+
+            let prev_hash = blocks[i - 1].header.calculate_hash();
+            if block.header.prev_block_hash != prev_hash {
+                println!("Chain invalid in Block: {}", i);
+                return false;
+            }
+
+            let hash = block.header.calculate_hash();
+            if hash.count_leading_zeros() < block.header.difficulty {
+                println!("Proof of Work Invalid in Block {}", i);
+                return false;
+            }
+        }
+        true
     }
 }
