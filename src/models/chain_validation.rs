@@ -70,12 +70,12 @@ impl Blockchain {
         // Verify Merkle Root
         let calculated_root = Hash::calculate_merkle_root(&block.transactions);
         if calculated_root != block.header.merkle_root {
-    1       println!("Merkle Root invalido!");
+            println!("Merkle Root invalido!");
             return false;
         }
 
         // Verify if there is at least 1 coinbase and if it is in the start
-        let coinbase_count = block.transactions.iter().filter(|tx| tx.is_coinbase());
+        let coinbase_count = block.transactions.iter().filter(|tx| tx.is_coinbase()).count();
         if coinbase_count != 1 || !block.transactions[0].is_coinbase() {
             println!("Hash anterior invalido!");
             return false;
