@@ -22,12 +22,15 @@ pub struct Blockchain {
 // Estrutura para salvar o estado completo
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlockchainSnapshot {
+    #[serde(default)]
+    pub version: u32,
     pub chain: Vec<Block>,
     pub utxos: Vec<(UTXOKey, Output)>,
     pub mempool: Vec<Transaction>,
 }
 
 pub const MINING_REWARD: u64 = 50;
+pub const BLOCKCHAIN_SNAPSHOT_VERSION: u32 = 1;
 
 impl Blockchain {
     /// Inicializa o blockchain com o block genesis
