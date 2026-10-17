@@ -25,7 +25,8 @@ O arquivo `blockchain.json` é estado local gerado durante a execução e está 
 ## O que existe hoje
 
 - Blocos com cabeçalho, nonce, dificuldade e raiz de Merkle.
-- Transações com inputs/outputs, assinatura Ed25519 e validação básica contra o conjunto UTXO em memória.
+- Transações com inputs/outputs e assinatura Ed25519 verificada contra o dono de cada UTXO consumido.
+- Validação de blocos com execução ordenada das transações, proteção contra double spend e limite de recompensa.
 - Recompensa de mineração e mempool em memória.
 - Snapshot JSON da cadeia, do conjunto UTXO e da mempool.
 - Esquema SQLite e operações auxiliares de armazenamento, ainda sem integração com o executável principal.
@@ -41,11 +42,13 @@ O arquivo `blockchain.json` é estado local gerado durante a execução e está 
 | `src/db/` | Camada SQLite experimental, não usada pelo fluxo principal. |
 | `src/network/` | Tipos de mensagem e um servidor inicial, ainda sem integração com o estado da cadeia. |
 | `docs/architecture.md` | Fluxo executado hoje, módulos e limites conhecidos. |
+| `docs/consensus.md` | Regras de validação implementadas e lacunas do protocolo experimental. |
 
 ## Limitações conhecidas
 
 - A carteira usada pelo executável deriva uma chave de uma frase fixa no código. Isso serve apenas para demonstração; não é uma forma segura de gerar ou guardar chaves.
-- As regras de consenso e a validação de inputs/blocos ainda estão incompletas. A validação completa da cadeia não reexecuta todas as regras sobre um estado UTXO reconstruído.
+- O consenso continua experimental: a política de dificuldade é simples e faltam regras temporais e outros limites de produção. As regras atualmente implementadas estão em [docs/consensus.md](docs/consensus.md).
+- A validação completa reexecuta os blocos e reconstrói UTXOs pelas regras implementadas, mas não substitui uma especificação de consenso auditada.
 - A persistência JSON pode entrar em pânico com dados inválidos e confia em partes do snapshot carregado.
 - A rede não usa framing de mensagens, limites de payload nem manipuladores integrados para blocos e transações.
 - Não há testes automatizados nem CI no estado inicial deste roadmap.

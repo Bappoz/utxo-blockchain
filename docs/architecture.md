@@ -32,7 +32,7 @@ O listener do `main` apenas lê bytes, imprime o conteúdo e responde com uma co
 - `block.rs` define `Block` e `BlockHeader`, calcula cabeçalhos e executa a busca de nonce.
 - `transaction.rs` define inputs e outputs, assinatura/verificação Ed25519 e reconhecimento de coinbase.
 - `blockchain.rs` mantém a cadeia, a mempool e o mapa UTXO; também seleciona transações e cria blocos candidatos.
-- `chain_validation.rs` contém verificações de transação, bloco e cadeia completa. As regras ainda estão incompletas e têm uma issue dedicada.
+- `chain_validation.rs` verifica assinatura por input, valores, ordem de transações, coinbase, recompensa, Proof of Work e replay completo da cadeia. A política implementada está detalhada em [consensus.md](consensus.md).
 - `chain_persistence.rs` serializa um snapshot JSON com cadeia, UTXOs e mempool.
 
 ### `crypto`
@@ -52,21 +52,23 @@ O listener do `main` apenas lê bytes, imprime o conteúdo e responde com uma co
 
 1. Uma transação referencia saídas anteriores por `(tx_hash, output_index)`.
 2. O estado UTXO associa essa chave a um `Output` com valor e chave pública destinatária.
-3. O envio para a mempool valida a transação contra o estado atual; a criação de bloco seleciona as transações válidas e acrescenta uma coinbase.
-4. A mineração incrementa o nonce até o hash do cabeçalho satisfazer a dificuldade em bits.
-5. Ao aceitar um bloco, o nó remove UTXOs gastos, insere novas saídas e adiciona o bloco à cadeia.
-6. O executável grava o snapshot JSON depois de cada bloco aceito.
+3. O envio para a mempool valida a assinatura de cada input com a chave do UTXO correspondente e reserva inputs já usados por outra transação pendente.
+4. A criação de bloco seleciona transações em sequência sobre um estado temporário; uma transação posterior pode usar uma saída criada antes no mesmo bloco, mas não pode reutilizar um input já gasto.
+5. A coinbase leva a altura como tag para que recompensas iguais em blocos diferentes tenham identificadores distintos; o minerador recebe no máximo a recompensa base mais as taxas.
+6. A mineração incrementa o nonce até o hash do cabeçalho satisfazer a dificuldade em bits.
+7. Ao aceitar um bloco, o nó remove UTXOs gastos, insere novas saídas e adiciona o bloco à cadeia.
+8. O executável grava o snapshot JSON depois de cada bloco aceito.
 
-Esses passos representam o desenho pretendido pelo código, não uma especificação de consenso completa. Há casos como inputs duplicados, verificação de assinatura por input e somas fora do intervalo que ainda precisam de regras explícitas.
+Esses passos representam as regras implementadas, não uma especificação de consenso completa. Veja [consensus.md](consensus.md) para as regras ausentes e os limites atuais.
 
 ## Limites e confiança
 
 - **Chaves:** a frase usada pelo minerador é fixa no código. Nunca reutilize essa chave para ativos reais.
-- **Validação:** a rotina que adiciona blocos não cobre todas as regras monetárias e de estado. A verificação da cadeia completa também não reconstrói o estado UTXO nem valida cada transação.
+- **Validação:** blocos são reexecutados sobre uma cópia temporária do estado e a cadeia completa é reconstruída desde o gênesis. Ainda faltam regras temporais, ajuste de dificuldade e outros limites necessários a uma rede de produção.
 - **Persistência:** o JSON carregado contém tanto os blocos quanto um UTXO set persistido; hoje o último é aceito sem reconstrução integral. O parser usa operações que podem entrar em pânico.
 - **Rede:** TCP é um fluxo de bytes, mas o listener atual faz uma leitura limitada e não define framing, tamanho máximo ou tratamento de mensagens concatenadas/fragmentadas.
 - **SQLite:** há código experimental, mas não há escolha de backend configurável nem sincronização entre SQLite e o snapshot JSON.
 
 ## Próximas etapas
 
-As issues [#2](https://github.com/Bappoz/utxo-blockchain/issues/2) a [#5](https://github.com/Bappoz/utxo-blockchain/issues/5) detalham as próximas etapas: invariantes de consenso, recuperação de estado, protocolo P2P e testes/CI. A evolução deve manter esses limites documentados até cada integração ter sido concluída.
+A issue [#2](https://github.com/Bappoz/utxo-blockchain/issues/2) registra o trabalho de invariantes descrito neste documento e em [consensus.md](consensus.md). As próximas etapas são recuperação de estado ([#3](https://github.com/Bappoz/utxo-blockchain/issues/3)), protocolo P2P ([#4](https://github.com/Bappoz/utxo-blockchain/issues/4)) e testes/CI ([#5](https://github.com/Bappoz/utxo-blockchain/issues/5)).
