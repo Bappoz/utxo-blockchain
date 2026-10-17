@@ -33,7 +33,7 @@ O listener do `main` apenas lê bytes, imprime o conteúdo e responde com uma co
 - `transaction.rs` define inputs e outputs, assinatura/verificação Ed25519 e reconhecimento de coinbase.
 - `blockchain.rs` mantém a cadeia, a mempool e o mapa UTXO; também seleciona transações e cria blocos candidatos.
 - `chain_validation.rs` verifica assinatura por input, valores, ordem de transações, coinbase, recompensa, Proof of Work e replay completo da cadeia. A política implementada está detalhada em [consensus.md](consensus.md).
-- `chain_persistence.rs` serializa um snapshot JSON com cadeia, UTXOs e mempool.
+- `chain_persistence.rs` grava snapshots JSON por arquivo temporário e rename; ao carregar, valida/reexecuta a cadeia, reconstrói UTXOs e revalida a mempool.
 
 ### `crypto`
 
@@ -42,7 +42,7 @@ O listener do `main` apenas lê bytes, imprime o conteúdo e responde com uma co
 
 ### `db`
 
-`sql_connection.rs` define tabelas e operações para blocos, transações, UTXOs e mempool. O `main` não cria nem usa `Database`; portanto, o backend efetivo do executável é o snapshot JSON.
+`sql_connection.rs` define tabelas e operações para blocos, transações, UTXOs e mempool. Gravações de bloco/transações e drenagem da mempool usam transações SQL; conversões numéricas são checadas. O `main` não cria nem usa `Database`; portanto, o backend efetivo do executável continua sendo o snapshot JSON.
 
 ### `network`
 
@@ -65,10 +65,10 @@ Esses passos representam as regras implementadas, não uma especificação de co
 
 - **Chaves:** a frase usada pelo minerador é fixa no código. Nunca reutilize essa chave para ativos reais.
 - **Validação:** blocos são reexecutados sobre uma cópia temporária do estado e a cadeia completa é reconstruída desde o gênesis. Ainda faltam regras temporais, ajuste de dificuldade e outros limites necessários a uma rede de produção.
-- **Persistência:** o JSON carregado contém tanto os blocos quanto um UTXO set persistido; hoje o último é aceito sem reconstrução integral. O parser usa operações que podem entrar em pânico.
+- **Persistência:** o UTXO set salvo é tratado como cache e reconstruído pelo replay dos blocos. JSON inválido, versão futura ou cadeia inválida retorna erro legível; snapshots antigos com coinbases sem tag de altura podem precisar ser recriados.
 - **Rede:** TCP é um fluxo de bytes, mas o listener atual faz uma leitura limitada e não define framing, tamanho máximo ou tratamento de mensagens concatenadas/fragmentadas.
 - **SQLite:** há código experimental, mas não há escolha de backend configurável nem sincronização entre SQLite e o snapshot JSON.
 
 ## Próximas etapas
 
-A issue [#2](https://github.com/Bappoz/utxo-blockchain/issues/2) registra o trabalho de invariantes descrito neste documento e em [consensus.md](consensus.md). As próximas etapas são recuperação de estado ([#3](https://github.com/Bappoz/utxo-blockchain/issues/3)), protocolo P2P ([#4](https://github.com/Bappoz/utxo-blockchain/issues/4)) e testes/CI ([#5](https://github.com/Bappoz/utxo-blockchain/issues/5)).
+A issue [#2](https://github.com/Bappoz/utxo-blockchain/issues/2) registra o trabalho de invariantes descrito neste documento e em [consensus.md](consensus.md). A recuperação de estado está sendo tratada na issue [#3](https://github.com/Bappoz/utxo-blockchain/issues/3); as próximas etapas são protocolo P2P ([#4](https://github.com/Bappoz/utxo-blockchain/issues/4)) e testes/CI ([#5](https://github.com/Bappoz/utxo-blockchain/issues/5)).

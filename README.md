@@ -20,7 +20,7 @@ cargo run --locked -- 8080
 
 O argumento opcional escolhe a porta do listener local; o padrão é `8080`. O programa inicia um listener em `127.0.0.1`, carrega `blockchain.json` do diretório atual (ou cria um bloco gênesis) e aguarda comandos no terminal. Pressione Enter para montar e minerar um bloco; digite `q` e pressione Enter para encerrar.
 
-O arquivo `blockchain.json` é estado local gerado durante a execução e está ignorado pelo Git. Ele ainda não é uma fonte de dados confiável: a rotina atual de carregamento não revalida o snapshot completo. Consulte [as limitações e o desenho atual](docs/architecture.md) antes de experimentar.
+O arquivo `blockchain.json` é estado local gerado durante a execução e está ignorado pelo Git. Ao carregar, o programa valida e reexecuta os blocos para reconstruir os UTXOs; snapshots corrompidos ou incompatíveis retornam erro em vez de serem aceitos. Consulte [as limitações e o desenho atual](docs/architecture.md) antes de experimentar.
 
 ## O que existe hoje
 
@@ -49,7 +49,7 @@ O arquivo `blockchain.json` é estado local gerado durante a execução e está 
 - A carteira usada pelo executável deriva uma chave de uma frase fixa no código. Isso serve apenas para demonstração; não é uma forma segura de gerar ou guardar chaves.
 - O consenso continua experimental: a política de dificuldade é simples e faltam regras temporais e outros limites de produção. As regras atualmente implementadas estão em [docs/consensus.md](docs/consensus.md).
 - A validação completa reexecuta os blocos e reconstrói UTXOs pelas regras implementadas, mas não substitui uma especificação de consenso auditada.
-- A persistência JSON pode entrar em pânico com dados inválidos e confia em partes do snapshot carregado.
+- A persistência JSON reconstrói o estado a partir dos blocos e grava snapshots por substituição atômica. Arquivos antigos com regras de coinbase incompatíveis precisam ser migrados ou recriados.
 - A rede não usa framing de mensagens, limites de payload nem manipuladores integrados para blocos e transações.
 - Não há testes automatizados nem CI no estado inicial deste roadmap.
 
