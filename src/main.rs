@@ -1,9 +1,9 @@
 use std::env;
-use tokio::net::{TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use utxo_blockchain::models::blockchain::Blockchain;
+use tokio::net::TcpListener;
 use utxo_blockchain::crypto::wallet::Wallet;
 use utxo_blockchain::models::block::Block;
+use utxo_blockchain::models::blockchain::Blockchain;
 use utxo_blockchain::models::transaction::Transaction;
 
 #[tokio::main]
@@ -20,11 +20,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut blockchain = carregar_ou_criar_blockchain("blockchain.json", &miner_wallet);
 
     // CLONAR ESTADO PARA AS THREADS
-    // Nota: Em um sistema real devo usar Arc<Mutex<Blockchain>>, 
+    // Nota: Em um sistema real devo usar Arc<Mutex<Blockchain>>,
     // mas para este rascunho vamos focar na escuta de rede.
-    
+
     let addr_clone = addr.clone();
-    
+
     //  O SERVIDOR DE REDE (Escuta outros nós)
     tokio::spawn(async move {
         let listener = TcpListener::bind(&addr_clone).await.unwrap();
@@ -38,34 +38,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut buffer = [0; 1024];
                 loop {
                     let n = socket.read(&mut buffer).await.unwrap();
-                    if n == 0 { break; }
-                    
+                    if n == 0 {
+                        break;
+                    }
+
                     let recebido = String::from_utf8_lossy(&buffer[..n]);
                     println!("📩 Mensagem de {}: {}", peer_addr, recebido);
-                    
+
                     // Responder apenas para confirmar
-                    socket.write_all(b"Mensagem recebida pelo no!").await.unwrap();
+                    socket
+                        .write_all(b"Mensagem recebida pelo no!")
+                        .await
+                        .unwrap();
                 }
             });
         }
     });
 
     println!("⛏️  Minerador pronto. Pressione Enter para minerar um bloco ou 'q' para sair.");
-    
+
     let mut input = String::new();
     loop {
         std::io::stdin().read_line(&mut input)?;
-        if input.trim() == "q" { break; }
+        if input.trim() == "q" {
+            break;
+        }
 
         println!("⛏️  Criando e minerando novo bloco...");
         let mut novo_bloco = blockchain.create_next_block(&miner_wallet.address(), 16);
-        novo_bloco.mine();
+        novo_bloco.mine()?;
 
         if blockchain.add_block(novo_bloco) {
             blockchain.save_to_file("blockchain.json")?;
             println!("✅ Bloco minerado e salvo!");
         }
-        
+
         input.clear();
     }
 
