@@ -1,14 +1,14 @@
-use std::fs::File;
-use std::io::{Write, Read};
-use ed25519_dalek::VerifyingKey;
-use serde::{Deserialize, Serialize};
-use crate::models::{block::Block, transaction::{Output, Transaction}};
 use crate::crypto::hashing::Hash;
+use crate::models::{
+    block::Block,
+    transaction::{Output, Transaction},
+};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 ///Representa o identificador único de um Output na rede
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct UTXOKey{
+pub struct UTXOKey {
     pub tx_hash: Hash,
     pub output_index: usize,
 }
@@ -16,7 +16,7 @@ pub struct UTXOKey{
 pub struct Blockchain {
     pub chain: Vec<Block>,
     pub utxos: HashMap<UTXOKey, Output>,
-    pub mempool: Vec<Transaction>,          // Sala de espera
+    pub mempool: Vec<Transaction>, // Sala de espera
 }
 
 // Estrutura para salvar o estado completo
@@ -27,12 +27,9 @@ pub struct BlockchainSnapshot {
     pub mempool: Vec<Transaction>,
 }
 
-
 pub const MINING_REWARD: u64 = 50;
 
 impl Blockchain {
-
-
     /// Inicializa o blockchain com o block genesis
     pub fn new(genesis_block: Block) -> Self {
         let mut bc = Blockchain {
@@ -45,7 +42,6 @@ impl Blockchain {
         bc
     }
 
-    
     pub fn submit_transaction(&mut self, tx: Transaction) -> bool {
         if self.validate_transaction(&tx).is_err() {
             return false;
@@ -53,87 +49,121 @@ impl Blockchain {
 
         // Verifica se a transação já não está na mempool evitando spam
         let tx_hash = tx.calculate_hash();
-        if self.mempool.iter().any(|m_tx| m_tx.calculate_hash() == tx_hash) {
+        if self
+            .mempool
+            .iter()
+            .any(|m_tx| m_tx.calculate_hash() == tx_hash)
+        {
             println!("Transacao ja esta na mempool");
             return false;
         }
+
+        let spends_reserved_input = tx.inputs.iter().any(|input| {
+            self.mempool.iter().any(|pending| {
+                pending.inputs.iter().any(|pending_input| {
+                    pending_input.prev_tx_hash == input.prev_tx_hash
+                        && pending_input.output_index == input.output_index
+                })
+            })
+        });
+        if spends_reserved_input {
+            return false;
+        }
+
         self.mempool.push(tx);
         true
     }
 
     /// O Minerador "limpa" a mempool e cria um novo bloco
     pub fn create_next_block(&mut self, miner_addr: &str, difficulty: usize) -> Block {
-        
-        let mut total_fees = 0;
+        let mut total_fees = 0u64;
         let mut valid_txs = Vec::new();
-
-        // Dreana a mempool e calcula a taxa
         let mempool_txs: Vec<_> = self.mempool.drain(..).collect();
+        let mut staged = Blockchain {
+            chain: self.chain.clone(),
+            utxos: self.utxos.clone(),
+            mempool: Vec::new(),
+        };
+
         for tx in mempool_txs {
-            if let Ok(fee) = self.validate_transaction(&tx) {
-                total_fees += fee;
+            if let Ok(fee) = staged.validate_transaction(&tx) {
+                let Some(new_total_fees) = total_fees.checked_add(fee) else {
+                    continue;
+                };
+                if MINING_REWARD.checked_add(new_total_fees).is_none() {
+                    continue;
+                }
+
+                total_fees = new_total_fees;
+                Self::apply_transaction_to_utxos(&mut staged.utxos, &tx);
                 valid_txs.push(tx);
             }
         }
 
-        // Recompensa do minerador (50 + taxa)
         let coinbase_reward = MINING_REWARD + total_fees;
-        let mut transactions = vec![Transaction::coinbase(miner_addr, coinbase_reward)];
+        let mut transactions = vec![Transaction::coinbase_for_height(
+            miner_addr,
+            coinbase_reward,
+            self.chain.len(),
+        )];
         transactions.extend(valid_txs);
 
-        let prev_hash = self.chain.last()
-                .map(|b| b.header.calculate_hash()).unwrap_or(Hash::new_empty());
-        
+        let prev_hash = self
+            .chain
+            .last()
+            .map(|b| b.header.calculate_hash())
+            .unwrap_or(Hash::new_empty());
+
         Block::new(prev_hash, transactions, difficulty)
     }
 
-    
-
     //Adiciona um bloco à corrente e atualiza o UTXO set
     pub fn add_block(&mut self, block: Block) -> bool {
-        
         if !self.validate_block(&block) {
             return false;
         }
-        
-        for tx in &block.transactions {
-            let tx_hash = tx.calculate_hash();
 
-            // Remover utxo usados como entrada (forma gastos)
-            // Nota: Transações Coinbase não têm inputs reais para remover
-            if!tx.is_coinbase() {
-                for input in &tx.inputs {
-                    let key = UTXOKey{
-                        tx_hash: input.prev_tx_hash,
-                        output_index: input.output_index,
-                    };
-                    self.utxos.remove(&key);
-                }
-            }
-            // Adicionar novos Outputs gerados por esta transação como UTXOs
-            for (index, output) in tx.outputs.iter().enumerate() {
-                let key = UTXOKey {
-                    tx_hash,
-                    output_index: index, 
-                };
-                self.utxos.insert(key, output.clone());
-            }
+        for tx in &block.transactions {
+            Self::apply_transaction_to_utxos(&mut self.utxos, tx);
         }
-        // Inseri o Bloco na corrente
+
         self.chain.push(block);
         true
-    } 
-
-    /// Calcula o saldo de um endereço (chave pública em hex) 
-    pub fn get_balance(&self, address: &str) -> u64 {
-        let mut balance = 0;
-        // Percorre somente os UTXOs existentes (moedas não gastas)
-        for output in self.utxos.values() {
-            if output.pubkey == address {
-                balance += output.value;
-            }
-        } balance
     }
 
+    pub(crate) fn apply_transaction_to_utxos(
+        utxos: &mut HashMap<UTXOKey, Output>,
+        tx: &Transaction,
+    ) {
+        if !tx.is_coinbase() {
+            for input in &tx.inputs {
+                let key = UTXOKey {
+                    tx_hash: input.prev_tx_hash,
+                    output_index: input.output_index,
+                };
+                utxos.remove(&key);
+            }
+        }
 
+        let tx_hash = tx.calculate_hash();
+        for (index, output) in tx.outputs.iter().enumerate() {
+            let key = UTXOKey {
+                tx_hash,
+                output_index: index,
+            };
+            utxos.insert(key, output.clone());
+        }
+    }
+
+    /// Calculates an address balance from the current unspent outputs.
+    pub fn get_balance(&self, address: &str) -> Result<u64, String> {
+        self.utxos
+            .values()
+            .filter(|output| output.pubkey == address)
+            .try_fold(0u64, |balance, output| {
+                balance
+                    .checked_add(output.value)
+                    .ok_or_else(|| "Balance exceeds u64::MAX".to_string())
+            })
+    }
 }

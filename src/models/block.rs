@@ -1,21 +1,21 @@
-use serde::{Serialize, Deserialize};
-use chrono::Utc;
-use crate::models::transaction::Transaction;
 use crate::crypto::hashing::Hash;
+use crate::models::transaction::Transaction;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
-    pub transactions: Vec<Transaction> 
+    pub transactions: Vec<Transaction>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BlockHeader {
     pub timestamp: i64,
     pub prev_block_hash: Hash,
-    pub merkle_root: Hash,              // O resumo de todas as transações do bloco
-    pub nonce: u64,                     // Usado na fase de mineração
-    pub difficulty: usize,                // Quantos zeros iniciais    
+    pub merkle_root: Hash, // O resumo de todas as transações do bloco
+    pub nonce: u64,        // Usado na fase de mineração
+    pub difficulty: usize, // Quantos zeros iniciais
 }
 
 impl BlockHeader {
@@ -26,7 +26,7 @@ impl BlockHeader {
 
 impl Block {
     pub fn new(prev_block_hash: Hash, transactions: Vec<Transaction>, difficulty: usize) -> Self {
-        // Calcula a Merkle Root 
+        // Calcula a Merkle Root
         let merkle_root = Hash::calculate_merkle_root(&transactions);
 
         let header = BlockHeader {
@@ -37,21 +37,31 @@ impl Block {
             difficulty,
         };
 
-        Block { 
-            header, 
-            transactions
+        Block {
+            header,
+            transactions,
         }
     }
 
-    pub fn mine(&mut self){
+    pub fn mine(&mut self) -> std::io::Result<()> {
+        if self.header.difficulty > 256 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Proof-of-Work difficulty cannot exceed 256 bits",
+            ));
+        }
+
         let start = Utc::now();
 
         println!("  Mineração iniciada às: {}", start.format("%H:%M:%S"));
-        println!("  Alvo de Dificuldade: {} bits zero", self.header.difficulty);
+        println!(
+            "  Alvo de Dificuldade: {} bits zero",
+            self.header.difficulty
+        );
 
         loop {
             let hash = self.header.calculate_hash();
-            if hash.count_leading_zeros() >= self.header.difficulty {
+            if hash.has_sufficient_difficulty(self.header.difficulty) {
                 let end_time = Utc::now();
                 let duration = end_time.signed_duration_since(start);
 
@@ -59,10 +69,11 @@ impl Block {
                 println!("   Hash:  {}", hash); // Usa o fmt::Display que você criou
                 println!("   Nonce: {}", self.header.nonce);
                 println!("   Tempo gasto: {}ms", duration.num_milliseconds());
-                println!("   Velocidade aprox: {} hashes/s",
+                println!(
+                    "   Velocidade aprox: {} hashes/s",
                     self.header.nonce as f32 / (duration.num_milliseconds() as f32 / 1000.0)
                 );
-                break;
+                return Ok(());
             }
 
             // Se não encontrou, incrementa o nonce
@@ -86,6 +97,9 @@ impl Block {
             nonce: 0,
             difficulty: 0,
         };
-        Block { header, transactions }
+        Block {
+            header,
+            transactions,
+        }
     }
 }
