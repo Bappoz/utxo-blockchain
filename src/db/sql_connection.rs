@@ -1,7 +1,12 @@
+use std::io;
+
+use rusqlite::types::Type;
+use rusqlite::{Connection, Result, Transaction as SqlTransaction, params};
+
+use crate::crypto::hashing::Hash;
 use crate::models::block::Block;
 use crate::models::blockchain::UTXOKey;
 use crate::models::transaction::{Output, Transaction};
-use rusqlite::{params, Connection, Result};
 
 pub struct Database {
     pub conn: Connection,
@@ -18,6 +23,8 @@ impl Database {
     fn create_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             "
+            PRAGMA foreign_keys = ON;
+
             CREATE TABLE IF NOT EXISTS blocks (
                 height      INTEGER PRIMARY KEY,
                 hash        TEXT NOT NULL UNIQUE,
@@ -26,15 +33,15 @@ impl Database {
                 timestamp   INTEGER NOT NULL,
                 nonce       INTEGER NOT NULL,
                 difficulty  INTEGER NOT NULL,
-                raw_data    BLOB NOT NULL      -- bloco serializado completo
+                raw_data    BLOB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
-                tx_hash     TEXT PRIMARY KEY,
-                block_hash  TEXT NOT NULL,
+                tx_hash      TEXT PRIMARY KEY,
+                block_hash   TEXT NOT NULL,
                 block_height INTEGER NOT NULL,
-                is_coinbase INTEGER NOT NULL,
-                raw_data    BLOB NOT NULL,
+                is_coinbase  INTEGER NOT NULL,
+                raw_data     BLOB NOT NULL,
                 FOREIGN KEY (block_hash) REFERENCES blocks(hash)
             );
 
@@ -48,84 +55,90 @@ impl Database {
             );
 
             CREATE TABLE IF NOT EXISTS mempool (
-                tx_hash  TEXT PRIMARY KEY,
-                raw_data BLOB NOT NULL,
+                tx_hash     TEXT PRIMARY KEY,
+                raw_data    BLOB NOT NULL,
                 received_at INTEGER NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_utxos_pubkey ON utxos(pubkey);
             CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block_hash);
             ",
-        )?;
-        Ok(())
+        )
     }
 
-    pub fn save_block(&self, block: &Block, height: usize) -> Result<()> {
+    /// Saves a block and all of its transaction rows atomically.
+    pub fn save_block(&mut self, block: &Block, height: usize) -> Result<()> {
+        let height = to_sql_i64(height)?;
+        let nonce = to_sql_i64(block.header.nonce)?;
+        let difficulty = to_sql_i64(block.header.difficulty)?;
         let hash = block.header.calculate_hash().to_hex();
         let prev_hash = block.header.prev_block_hash.to_hex();
         let merkle_root = block.header.merkle_root.to_hex();
-        let raw_data = bincode::serialize(block).unwrap();
+        let raw_data = serialize_for_sql(block)?;
 
-        self.conn.execute(
-            "INSERT OR REPLACE INTO blocks
+        let transaction = self.conn.transaction()?;
+        transaction.execute(
+            "INSERT INTO blocks
             (height, hash, prev_hash, merkle_root, timestamp, nonce, difficulty, raw_data)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                height as i64,
+                height,
                 hash,
                 prev_hash,
                 merkle_root,
-                block.header.timestamp as i64,
-                block.header.nonce as i64,
-                block.header.difficulty as i64,
+                block.header.timestamp,
+                nonce,
+                difficulty,
                 raw_data,
             ],
         )?;
 
-        // Sabe each transaction block
         for tx in &block.transactions {
-            self.save_transactions(tx, &hash, height)?;
+            Self::save_transaction(&transaction, tx, &hash, height)?;
         }
-        Ok(())
+
+        transaction.commit()
     }
 
     pub fn load_all_blocks(&self) -> Result<Vec<Block>> {
-        let mut stmt = self
+        let mut statement = self
             .conn
-            .prepare("SELECT raw_data FROM blocks ORDER by height ASC")?;
-        let blocks = stmt
-            .query_map([], |row| {
-                let raw: Vec<u8> = row.get(0)?;
-                Ok(raw)
-            })?
-            .filter_map(|r| r.ok())
-            .filter_map(|raw| bincode::deserialize::<Block>(&raw).ok())
-            .collect();
-
-        Ok(blocks)
+            .prepare("SELECT raw_data FROM blocks ORDER BY height ASC")?;
+        let rows = statement.query_map([], |row| {
+            let raw_data: Vec<u8> = row.get(0)?;
+            bincode::deserialize(&raw_data).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(0, Type::Blob, Box::new(error))
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn get_chain_height(&self) -> Result<usize> {
-        let height: usize =
+        let height: Option<i64> =
             self.conn
-                .query_row("SELECT COALESCE(MAX(height), 0) FROM blocks", [], |row| {
-                    row.get::<_, i64>(0).map(|h| h as usize)
-                })?;
-        Ok(height)
+                .query_row("SELECT MAX(height) FROM blocks", [], |row| row.get(0))?;
+        match height {
+            Some(height) => from_sql_usize(height, 0),
+            None => Ok(0),
+        }
     }
 
-    fn save_transactions(&self, tx: &Transaction, block_hash: &str, height: usize) -> Result<()> {
+    fn save_transaction(
+        transaction: &SqlTransaction<'_>,
+        tx: &Transaction,
+        block_hash: &str,
+        height: i64,
+    ) -> Result<()> {
         let tx_hash = tx.calculate_hash().to_hex();
-        let raw_data = bincode::serialize(tx).unwrap();
-
-        self.conn.execute(
-            "INSERT OR REPLACE INTO transactions
+        let raw_data = serialize_for_sql(tx)?;
+        transaction.execute(
+            "INSERT INTO transactions
             (tx_hash, block_hash, block_height, is_coinbase, raw_data)
             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 tx_hash,
                 block_hash,
-                height as i64,
+                height,
                 tx.is_coinbase() as i32,
                 raw_data
             ],
@@ -137,114 +150,155 @@ impl Database {
         let result = self.conn.query_row(
             "SELECT raw_data FROM transactions WHERE tx_hash = ?1",
             params![tx_hash],
-            |row| row.get::<_, Vec<u8>>(0),
+            |row| {
+                let raw_data: Vec<u8> = row.get(0)?;
+                bincode::deserialize(&raw_data).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Blob, Box::new(error))
+                })
+            },
         );
         match result {
-            Ok(raw) => Ok(bincode::deserialize(&raw).ok()),
+            Ok(transaction) => Ok(Some(transaction)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
+            Err(error) => Err(error),
         }
     }
 
-    // ─── UTXOs ─────────────────────────────────────────────────────────────
-
-    pub fn save_utxo(
-        &self,
-        key: &UTXOKey,
-        output: &crate::models::transaction::Output,
-    ) -> Result<()> {
+    pub fn save_utxo(&self, key: &UTXOKey, output: &Output) -> Result<()> {
+        let output_index = to_sql_i64(key.output_index)?;
+        let value = to_sql_i64(output.value)?;
         self.conn.execute(
             "INSERT OR REPLACE INTO utxos (tx_hash, output_index, value, pubkey, spent)
              VALUES (?1, ?2, ?3, ?4, 0)",
-            params![
-                key.tx_hash.to_hex(),
-                key.output_index as i64,
-                output.value as i64,
-                output.pubkey,
-            ],
+            params![key.tx_hash.to_hex(), output_index, value, output.pubkey],
         )?;
         Ok(())
     }
 
     pub fn spend_utxo(&self, key: &UTXOKey) -> Result<()> {
+        let output_index = to_sql_i64(key.output_index)?;
         self.conn.execute(
             "UPDATE utxos SET spent = 1 WHERE tx_hash = ?1 AND output_index = ?2",
-            params![key.tx_hash.to_hex(), key.output_index as i64],
+            params![key.tx_hash.to_hex(), output_index],
         )?;
         Ok(())
     }
 
     pub fn get_balance(&self, pubkey: &str) -> Result<u64> {
-        let balance: u64 = self.conn.query_row(
+        let balance: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(value), 0) FROM utxos WHERE pubkey = ?1 AND spent = 0",
             params![pubkey],
-            |row| row.get::<_, i64>(0).map(|v| v as u64),
+            |row| row.get(0),
         )?;
-        Ok(balance)
+        from_sql_u64(balance, 0)
     }
 
     pub fn get_utxos_for_address(&self, pubkey: &str) -> Result<Vec<(UTXOKey, Output)>> {
-        // Útil para construir transações (wallet)
-        let mut stmt = self.conn.prepare(
+        let mut statement = self.conn.prepare(
             "SELECT tx_hash, output_index, value FROM utxos
              WHERE pubkey = ?1 AND spent = 0",
         )?;
-        let rows = stmt.query_map(params![pubkey], |row| {
+        let rows = statement.query_map(params![pubkey], |row| {
             let tx_hash_hex: String = row.get(0)?;
-            let output_index: usize = row.get::<_, i64>(1)? as usize;
-            let value: u64 = row.get::<_, i64>(2)? as u64;
-            Ok((tx_hash_hex, output_index, value))
+            let bytes = hex::decode(&tx_hash_hex)
+                .map_err(|error| conversion_error(0, Type::Text, error.to_string()))?;
+            if bytes.len() != 32 {
+                return Err(conversion_error(
+                    0,
+                    Type::Text,
+                    "Transaction hash must be 32 bytes",
+                ));
+            }
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes.copy_from_slice(&bytes);
+
+            let output_index = from_sql_usize(row.get(1)?, 1)?;
+            let value = from_sql_u64(row.get(2)?, 2)?;
+            Ok((Hash::new(hash_bytes), output_index, value))
         })?;
 
-        let mut result = Vec::new();
-        for row in rows.flatten() {
-            let (tx_hash_hex, output_index, value) = row;
-            if let Ok(bytes) = hex::decode(&tx_hash_hex) {
-                if bytes.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&bytes);
-                    use crate::crypto::hashing::Hash;
-                    let key = UTXOKey {
-                        tx_hash: Hash::new(arr),
-                        output_index,
-                    };
-                    let output = Output {
-                        value,
-                        pubkey: pubkey.to_string(),
-                    };
-                    result.push((key, output));
-                }
-            }
-        }
-        Ok(result)
+        rows.map(|row| {
+            let (tx_hash, output_index, value) = row?;
+            let key = UTXOKey {
+                tx_hash,
+                output_index,
+            };
+            let output = Output {
+                value,
+                pubkey: pubkey.to_string(),
+            };
+            Ok((key, output))
+        })
+        .collect()
     }
-
-    // ─── MEMPOOL ───────────────────────────────────────────────────────────
 
     pub fn add_to_mempool(&self, tx: &Transaction) -> Result<()> {
         let tx_hash = tx.calculate_hash().to_hex();
-        let raw_data = bincode::serialize(tx).unwrap();
-        let now = chrono::Utc::now().timestamp();
-
+        let raw_data = serialize_for_sql(tx)?;
+        let received_at = chrono::Utc::now().timestamp();
         self.conn.execute(
             "INSERT OR IGNORE INTO mempool (tx_hash, raw_data, received_at)
              VALUES (?1, ?2, ?3)",
-            params![tx_hash, raw_data, now],
+            params![tx_hash, raw_data, received_at],
         )?;
         Ok(())
     }
 
-    pub fn drain_mempool(&self) -> Result<Vec<Transaction>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT raw_data FROM mempool ORDER BY received_at")?;
-        let txs: Vec<Transaction> = stmt
-            .query_map([], |row| row.get::<_, Vec<u8>>(0))?
-            .filter_map(|r| r.ok())
-            .filter_map(|raw| bincode::deserialize(&raw).ok())
-            .collect();
-
-        self.conn.execute("DELETE FROM mempool", [])?;
-        Ok(txs)
+    /// Returns pending transactions and deletes them in one transaction. A
+    /// malformed row aborts the operation and leaves the mempool intact.
+    pub fn drain_mempool(&mut self) -> Result<Vec<Transaction>> {
+        let transaction = self.conn.transaction()?;
+        let pending = {
+            let mut statement =
+                transaction.prepare("SELECT raw_data FROM mempool ORDER BY received_at")?;
+            let rows = statement.query_map([], |row| {
+                let raw_data: Vec<u8> = row.get(0)?;
+                bincode::deserialize(&raw_data).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Blob, Box::new(error))
+                })
+            })?;
+            rows.collect::<Result<Vec<Transaction>>>()?
+        };
+        transaction.execute("DELETE FROM mempool", [])?;
+        transaction.commit()?;
+        Ok(pending)
     }
+}
+
+fn serialize_for_sql<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    bincode::serialize(value)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
+fn to_sql_i64<T>(value: T) -> Result<i64>
+where
+    T: TryInto<i64>,
+    T::Error: std::error::Error + Send + Sync + 'static,
+{
+    value
+        .try_into()
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
+fn from_sql_usize(value: i64, column: usize) -> Result<usize> {
+    usize::try_from(value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(column, Type::Integer, Box::new(error))
+    })
+}
+
+fn from_sql_u64(value: i64, column: usize) -> Result<u64> {
+    u64::try_from(value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(column, Type::Integer, Box::new(error))
+    })
+}
+
+fn conversion_error(column: usize, column_type: Type, message: impl ToString) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        column,
+        column_type,
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            message.to_string(),
+        )),
+    )
 }

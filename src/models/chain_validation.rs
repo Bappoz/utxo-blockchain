@@ -138,22 +138,26 @@ impl Blockchain {
     /// Replays blocks from genesis through the same stateful block validator
     /// used when accepting new blocks.
     pub fn validate_full_chain(blocks: &[Block]) -> bool {
-        if blocks.is_empty() {
-            return false;
-        }
+        Self::rebuild_from_chain(blocks).is_ok()
+    }
 
+    /// Rebuilds the chain state by validating and applying blocks in order.
+    pub fn rebuild_from_chain(blocks: &[Block]) -> Result<Self, String> {
+        if blocks.is_empty() {
+            return Err("Chain snapshot does not contain a genesis block".into());
+        }
         let mut replayed = Blockchain {
             chain: Vec::new(),
             utxos: HashMap::new(),
             mempool: Vec::new(),
         };
 
-        for block in blocks {
+        for (height, block) in blocks.iter().enumerate() {
             if !replayed.add_block(block.clone()) {
-                return false;
+                return Err(format!("Invalid block at height {height}"));
             }
         }
-        true
+        Ok(replayed)
     }
 
     fn validate_transactions_in_block(&self, block: &Block) -> Result<u64, String> {

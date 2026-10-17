@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Inicializar Blockchain e Carteira
     let miner_wallet = Wallet::from_seed("minerador_secreto_123");
-    let mut blockchain = carregar_ou_criar_blockchain("blockchain.json", &miner_wallet);
+    let mut blockchain = carregar_ou_criar_blockchain("blockchain.json", &miner_wallet)?;
 
     // CLONAR ESTADO PARA AS THREADS
     // Nota: Em um sistema real devo usar Arc<Mutex<Blockchain>>,
@@ -80,14 +80,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // Função auxiliar para simplificar a main
-fn carregar_ou_criar_blockchain(path: &str, wallet: &Wallet) -> Blockchain {
+fn carregar_ou_criar_blockchain(
+    path: &str,
+    wallet: &Wallet,
+) -> Result<Blockchain, Box<dyn std::error::Error>> {
     if std::path::Path::new(path).exists() {
-        Blockchain::load_from_file(path).unwrap()
+        Ok(Blockchain::load_from_file(path)?)
     } else {
         let genesis_tx = Transaction::coinbase(&wallet.address(), 50);
         let genesis_block = Block::genesis(genesis_tx);
         let bc = Blockchain::new(genesis_block);
-        bc.save_to_file(path).unwrap();
-        bc
+        bc.save_to_file(path)?;
+        Ok(bc)
     }
 }
